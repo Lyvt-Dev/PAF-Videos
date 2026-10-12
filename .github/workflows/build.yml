@@ -1,99 +1,104 @@
-name: Windows build and release
+name: Native C++ Windows build and release
 on:
   push:
-    branches: [main, work]
+    branches: [main]
     tags: ['v*']
   pull_request:
   workflow_dispatch:
 permissions:
   contents: read
 jobs:
+  core:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+      - run: cmake --build build --parallel 2
+      - run: ctest --test-dir build --output-on-failure
   windows:
     runs-on: windows-latest
+    needs: core
     permissions:
       contents: write
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-      - run: pip install -r requirements.txt pytest==9.1.1 pyinstaller==6.19.0
-      - name: Install VLC and Inno Setup
+      - name: Verify release version
+        shell: pwsh
+        run: |
+          $env:PAF_VERSION = [regex]::Match((Get-Content CMakeLists.txt -Raw), 'set\(PAF_RELEASE_VERSION "([0-9.]+(?:-fix)?)"\)').Groups[1].Value
+          if (-not $env:PAF_VERSION) { throw 'Missing version' }
+          "PAF_VERSION=$env:PAF_VERSION" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          if ($env:GITHUB_REF_TYPE -eq 'tag' -and $env:GITHUB_REF_NAME -ne "v$env:PAF_VERSION") { throw 'Release tag does not match application version' }
+      - name: Build native x64 C++ binaries
+        shell: pwsh
+        run: |
+          cmake -S . -B build -A x64
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cmake --build build --config Release --parallel 2 2>&1 | Tee-Object build/build.log
+          $result = $LASTEXITCODE
+          if ($result -ne 0) {
+            Get-Content build/build.log | Where-Object { $_ -match 'error (C[0-9]+|LNK[0-9]+|RC[0-9]+|MSB[0-9]+)' } | ForEach-Object { Write-Output "::error::$_" }
+          }
+          exit $result
+      - run: ctest --test-dir build -C Release --output-on-failure
+      - name: Install verified VLC package and Inno Setup
         run: |
           choco install vlc --version=3.0.21 -y --no-progress
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           choco install innosetup -y --no-progress
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      - run: python -m pytest -q
-      - name: Bundle desktop application
-        run: >-
-          pyinstaller --noconfirm --windowed --name PAF-Videos
-          --paths src --collect-all paf_videos --add-data "assets;assets"
-          --add-data "C:\Program Files\VideoLAN\VLC;vlc"
-          run.py
-      - name: Bundle update helper
-        run: |
-          pyinstaller --noconfirm --onefile --windowed --name PAF-Videos.Update update_helper.py
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          Copy-Item dist\PAF-Videos.Update.exe dist\PAF-Videos\PAF-Videos.Update.exe
-      - name: Include third-party license notices
-        run: |
-          Copy-Item THIRD_PARTY_NOTICES.md dist\PAF-Videos\THIRD_PARTY_NOTICES.md
-          Copy-Item licenses dist\PAF-Videos\licenses -Recurse
-      - name: Test bundled EXE
+      - name: Package bundled VLC runtime and native application
         shell: pwsh
         run: |
-          $report = Join-Path $env:RUNNER_TEMP 'portable-smoke.json'
-          $process = Start-Process dist\PAF-Videos\PAF-Videos.exe -ArgumentList "--smoke-test `"$report`"" -PassThru
-          if (-not $process.WaitForExit(60000)) { $process.Kill(); throw 'Portable EXE timed out' }
-          if ($process.ExitCode -ne 0) { if (Test-Path $report) { Get-Content $report }; throw 'Portable EXE failed' }
-          if (-not (Test-Path $report)) { throw 'Missing portable smoke-test report' }
-          $result = Get-Content $report | ConvertFrom-Json
-          if (-not $result.ok -or $result.decoded_audio -le 0) { throw 'VLC smoke test failed' }
-          Get-Content $report
+          New-Item -ItemType Directory dist/PAF-Videos/vlc -Force | Out-Null
+          Copy-Item build/Release/PAF-Videos.exe,build/Release/PAF-Videos.Update.exe,LICENSE,THIRD_PARTY_NOTICES.md dist/PAF-Videos/
+          Copy-Item 'C:\Program Files\VideoLAN\VLC\*' dist/PAF-Videos/vlc -Recurse
+          Get-ChildItem dist/PAF-Videos/vlc/*.exe | Remove-Item
+          Get-ChildItem dist/PAF-Videos/vlc -Filter plugins.dat -Recurse | Remove-Item
+          Copy-Item README.md dist/PAF-Videos/README.md
+          # Prevent a globally installed VLC from hiding missing bundled DLLs or plugins.
+          choco uninstall vlc -y --no-progress
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if (Test-Path 'C:\Program Files\VideoLAN\VLC\libvlc.dll') { throw 'Global VLC is still installed' }
+      - name: Test portable native player without installed VLC
+        shell: pwsh
+        run: |
+          & scripts/test-windows.ps1 -Exe (Resolve-Path dist/PAF-Videos/PAF-Videos.exe).Path -Fixture (Resolve-Path tests/fixtures/sample.mp4).Path -Prefix 'portable'
       - name: Build installer and update manifest
         shell: pwsh
         run: |
-          $env:PAF_VERSION = python -c "import sys; sys.path.insert(0,'src'); from paf_videos import __version__; print(__version__)"
-          if ($env:GITHUB_REF_TYPE -eq 'tag' -and $env:GITHUB_REF_NAME -ne "v$env:PAF_VERSION") { throw 'Release tag does not match application version' }
-          & 'C:\Program Files (x86)\Inno Setup 6\ISCC.exe' installer\PAFVideos.iss
+          & 'C:\Program Files (x86)\Inno Setup 6\ISCC.exe' installer/PAFVideos.iss
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          $file = Get-Item dist\setup.exe
-          @{version=$env:PAF_VERSION; sha256=(Get-FileHash $file.FullName -Algorithm SHA256).Hash.ToLower(); size=$file.Length} | ConvertTo-Json -Compress | Set-Content -Encoding utf8NoBOM dist\update.json
-          Compress-Archive dist\PAF-Videos\* dist\PAF-Videos-portable.zip
-      - name: Test installed application and update handoff
+          $file = Get-Item dist/setup.exe
+          $hash = (Get-FileHash $file.FullName -Algorithm SHA256).Hash.ToLower()
+          $manifest = '{"version":"' + $env:PAF_VERSION + '","sha256":"' + $hash + '","size":' + $file.Length + '}'
+          [IO.File]::WriteAllText((Join-Path $pwd 'dist/update.json'), $manifest, [Text.UTF8Encoding]::new($false))
+          Compress-Archive dist/PAF-Videos/* dist/PAF-Videos-portable.zip
+      - name: Test installation and native update helper
         shell: pwsh
         run: |
           $installDir = Join-Path $env:RUNNER_TEMP 'PAF-Videos-installed'
-          $setup = (Resolve-Path dist\setup.exe).Path
+          $setup = (Resolve-Path dist/setup.exe).Path
           $process = Start-Process $setup -ArgumentList "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /DIR=`"$installDir`"" -PassThru
           if (-not $process.WaitForExit(120000)) { $process.Kill(); throw 'Installation timed out' }
           if ($process.ExitCode -ne 0) { throw 'Installer failed' }
           $exe = Join-Path $installDir 'PAF-Videos.exe'
-          $report = Join-Path $env:RUNNER_TEMP 'installed-smoke.json'
-          $process = Start-Process $exe -ArgumentList "--smoke-test `"$report`"" -PassThru
-          if (-not $process.WaitForExit(60000)) { $process.Kill(); throw 'Installed EXE timed out' }
-          if ($process.ExitCode -ne 0 -or -not (Test-Path $report)) { throw 'Installed EXE failed' }
-          if (-not (Get-Content $report | ConvertFrom-Json).ok) { throw 'Installed smoke test failed' }
-          $manifest = Get-Content dist\update.json | ConvertFrom-Json
+          $fixture = (Resolve-Path tests/fixtures/sample.mp4).Path
+          & scripts/test-windows.ps1 -Exe $exe -Fixture $fixture -Prefix 'installed'
+          $manifest = Get-Content dist/update.json | ConvertFrom-Json
           $process = Start-Process $exe -ArgumentList "--test-update `"$setup`" $($manifest.sha256) $($manifest.size)" -PassThru
           if (-not $process.WaitForExit(60000)) { $process.Kill(); throw 'Update launch timed out' }
           if ($process.ExitCode -ne 0) { throw 'Update launch failed' }
-          $updateResult = [IO.Path]::ChangeExtension($setup, '.result.json')
+          $resultFile = [IO.Path]::ChangeExtension($setup, '.result.json')
           $deadline = [DateTime]::UtcNow.AddSeconds(150)
-          while (-not (Test-Path $updateResult) -and [DateTime]::UtcNow -lt $deadline) { Start-Sleep -Seconds 2 }
-          if (-not (Test-Path $updateResult)) { throw 'Update helper did not finish' }
-          $result = Get-Content $updateResult | ConvertFrom-Json
-          if (-not $result.ok) { Get-Content $updateResult; throw 'Update installation failed' }
-          Get-Content $updateResult
-          Remove-Item $report
-          $process = Start-Process $exe -ArgumentList "--smoke-test `"$report`"" -PassThru
-          if (-not $process.WaitForExit(60000)) { $process.Kill(); throw 'Updated EXE timed out' }
-          if ($process.ExitCode -ne 0 -or -not (Test-Path $report)) { throw 'Updated EXE failed' }
-          if (-not (Get-Content $report | ConvertFrom-Json).ok) { throw 'Updated smoke test failed' }
+          while (-not (Test-Path $resultFile) -and [DateTime]::UtcNow -lt $deadline) { Start-Sleep -Seconds 2 }
+          if (-not (Test-Path $resultFile)) { throw 'Update helper did not finish' }
+          $result = Get-Content $resultFile | ConvertFrom-Json
+          if (-not $result.ok) { throw "Native update installer returned $($result.installer_exit_code)" }
+          & scripts/test-windows.ps1 -Exe $exe -Fixture $fixture -Prefix 'updated'
       - uses: actions/upload-artifact@v4
         with:
-          name: PAF-Videos-Windows
+          name: PAF-Videos-Windows-native
           path: |
             dist/setup.exe
             dist/update.json
@@ -105,7 +110,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create $env:GITHUB_REF_NAME dist/setup.exe dist/update.json dist/PAF-Videos-portable.zip --verify-tag --draft --title "PAF-Videos $env:GITHUB_REF_NAME" --notes-file docs/release-notes-0.1.0.md
+          gh release create $env:GITHUB_REF_NAME dist/setup.exe dist/update.json dist/PAF-Videos-portable.zip --verify-tag --draft --title "PAF-Videos $env:GITHUB_REF_NAME – Native C++" --notes-file "docs/release-notes-$env:PAF_VERSION.md"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $assets = gh release view $env:GITHUB_REF_NAME --json assets --jq '.assets | length'
           if ($LASTEXITCODE -ne 0 -or $assets -ne '3') { throw 'Release is incomplete; keeping draft unpublished' }

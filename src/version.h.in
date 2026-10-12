@@ -1,0 +1,3 @@
+#pragma once
+#define PAF_VERSION "@PAF_RELEASE_VERSION@"
+#define PAF_VERSION_W L"@PAF_RELEASE_VERSION@"

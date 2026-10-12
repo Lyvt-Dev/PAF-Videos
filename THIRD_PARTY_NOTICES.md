@@ -1,9 +1,10 @@
 # Third-party components
 
-* PySide6 / Qt: LGPLv3, GPLv3 or commercial terms, depending on modules. https://www.qt.io/licensing/
-* python-vlc: LGPLv2.1 or later. https://pypi.org/project/python-vlc/
-* VLC / libVLC: libVLC LGPLv2.1 or later; VLC and various plugins have GPL and other licenses. Preserve all bundled COPYING, AUTHORS and plugin notices. Sources: https://www.videolan.org/vlc/download-sources.html
+PAF-Videos application source and its updater are MIT-licensed. The native update service/helper are adapted from Lyvt-Dev/PAF-Photos; its MIT copyright/license is retained in LICENSE.
 
-Only Qt Widgets/Core/Gui are used by the application. Distribution must satisfy the licenses of the actual bundled binaries, including source/relinking obligations where applicable. This project does not include Microsoft artwork or branding.
+The distributed `vlc` folder contains VLC 3.0.21's dynamically loaded libVLC, libvlccore and plugins. libVLC is LGPLv2.1 or later; VLC and plugins have GPL and other licenses. The distribution retains VLC's COPYING, AUTHORS and other bundled notices. Libraries and plugins can be replaced independently of the application.
 
-The distribution includes the Qt LGPLv3/GPLv3 texts and Qt exception in `licenses/`, the python-vlc LGPLv2.1 text, and the VLC installation’s own notices. Qt shared libraries remain replaceable in the `_internal/PySide6` directory. Qt 6.10.2 sources: https://github.com/qt/qtbase/tree/v6.10.2 and https://download.qt.io/archive/qt/6.10/6.10.2/submodules/ . PySide6 6.10.2 sources: https://code.qt.io/cgit/pyside/pyside-setup.git/tag/?h=v6.10.2 .
+VLC 3.0.21 corresponding source: https://download.videolan.org/pub/videolan/vlc/3.0.21/vlc-3.0.21.tar.xz
+VLC source/build instructions: https://www.videolan.org/developers/vlc.html
+
+The native application uses Windows system APIs. Python and Qt are not part of the native 0.1.1 distribution. The V-logo was created for PAF-Videos from the user's PAF-Photos logo reference.

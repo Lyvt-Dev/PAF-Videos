@@ -14,8 +14,11 @@ Compression=lzma2
 SolidCompression=yes
 UninstallDisplayIcon={app}\PAF-Videos.exe
 CloseApplications=yes
+SetupIconFile=..\assets\app.ico
 [Files]
 Source: "..\dist\PAF-Videos\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+[InstallDelete]
+Type: filesandordirs; Name: "{app}\_internal"
 [Registry]
 Root: HKCU; Subkey: "Software\PAFVideos"; ValueType: string; ValueName: "InstallDir"; ValueData: "{app}"; Flags: uninsdeletekey
 [Icons]
