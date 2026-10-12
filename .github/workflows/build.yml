@@ -50,16 +50,25 @@ jobs:
       - name: Package bundled VLC runtime and native application
         shell: pwsh
         run: |
-          New-Item -ItemType Directory dist/PAF-Videos/vlc -Force | Out-Null
-          Copy-Item build/Release/PAF-Videos.exe,build/Release/PAF-Videos.Update.exe,LICENSE,THIRD_PARTY_NOTICES.md dist/PAF-Videos/
-          Copy-Item 'C:\Program Files\VideoLAN\VLC\*' dist/PAF-Videos/vlc -Recurse
-          Get-ChildItem dist/PAF-Videos/vlc/*.exe | Remove-Item
-          Get-ChildItem dist/PAF-Videos/vlc -Filter plugins.dat -Recurse | Remove-Item
-          Copy-Item README.md dist/PAF-Videos/README.md
-          # Prevent a globally installed VLC from hiding missing bundled DLLs or plugins.
-          choco uninstall vlc -y --no-progress
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          if (Test-Path 'C:\Program Files\VideoLAN\VLC\libvlc.dll') { throw 'Global VLC is still installed' }
+          try {
+            New-Item -ItemType Directory dist/PAF-Videos/vlc -Force | Out-Null
+            Copy-Item build/Release/PAF-Videos.exe,build/Release/PAF-Videos.Update.exe,LICENSE,THIRD_PARTY_NOTICES.md dist/PAF-Videos/
+            Copy-Item 'C:\Program Files\VideoLAN\VLC\*' dist/PAF-Videos/vlc -Recurse
+            Get-ChildItem dist/PAF-Videos/vlc/*.exe | Remove-Item
+            Get-ChildItem dist/PAF-Videos/vlc -Filter plugins.dat -Recurse | Remove-Item
+            Copy-Item README.md dist/PAF-Videos/README.md
+            # Prevent a globally installed VLC from hiding missing bundled DLLs or plugins.
+            choco uninstall vlc -y 2>&1 | Tee-Object build/vlc-uninstall.log
+            if ($LASTEXITCODE -ne 0) {
+              $details = (Get-Content build/vlc-uninstall.log -Tail 35) -join ' | '
+              Write-Output "::error::VLC uninstall failed: $details"
+              exit 1
+            }
+            if (Test-Path 'C:\Program Files\VideoLAN\VLC\libvlc.dll') { throw 'Global VLC is still installed' }
+          } catch {
+            Write-Output "::error::Native package creation failed: $($_.Exception.Message)"
+            throw
+          }
       - name: Test portable native player without installed VLC
         shell: pwsh
         run: |
