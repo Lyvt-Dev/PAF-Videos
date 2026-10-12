@@ -64,6 +64,11 @@ jobs:
               Write-Output "::error::VLC uninstall failed: $details"
               exit 1
             }
+            # Chocolatey/VLC can leave files after a successful uninstall on hosted runners.
+            # This directory was installed by this job; the runtime copy in dist is retained.
+            if (Test-Path 'C:\Program Files\VideoLAN\VLC') {
+              Remove-Item 'C:\Program Files\VideoLAN\VLC' -Recurse -Force
+            }
             if (Test-Path 'C:\Program Files\VideoLAN\VLC\libvlc.dll') { throw 'Global VLC is still installed' }
           } catch {
             Write-Output "::error::Native package creation failed: $($_.Exception.Message)"
